@@ -113,7 +113,7 @@ iai mcps create gatehouse-support-write --image-name gatehouse --image-tag v1 --
 python -m unittest discover -s tests
 ```
 
-27 tests: every rule; shadow mode; masking edge cases (only Luhn-valid card numbers, amounts and ticket ids
+29 tests: every rule; shadow mode; masking edge cases (only Luhn-valid card numbers, amounts and ticket ids
 untouched); the idempotency window; the full proxy in memory; a real streamable-http run that refuses
 a call without the bearer key and still applies the rules with it; and a set of bypass regressions.
 
@@ -128,6 +128,9 @@ upstream's validator will execute them, and refuses whatever it cannot read:
 * A rule that cannot evaluate an argument denies the call; whitespace counts as missing.
 * `IBAN`, `iban` and `dateOfBirth` / `date_of_birth` are the same field to the masker.
 * Content it cannot inspect (an image of an ID document, an embedded file) is withheld.
+* It proxies tools only. Upstream resources and prompts would bypass every rule and mask, so they are
+  neither listed nor readable through gatehouse.
+* Shadow mode softens rules, never the profile: a tool outside the profile is refused in every mode.
 * The bearer key is compared in constant time, and if the config asks for a key that resolves empty,
   gatehouse refuses to start rather than serving unauthenticated.
 

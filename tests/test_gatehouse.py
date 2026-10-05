@@ -197,6 +197,51 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(res.structured_content["status"], "UPDATED")            # it ran
         self.assertEqual(res.structured_content["iban"], "****3000")             # still masked
 
+    def test_shadow_mode_never_opens_the_profile(self):
+        backend = fresh_backend()
+        gate = load(EXAMPLE / "gatehouse.yaml")
+        gate.shadow = True
+
+        async def go():
+            async with Client(build(gate, "support-read", upstream=backend.mcp)) as c:
+                return await c.call_tool("apply_bonus", {"player_id": "P-1001", "amount_eur": 10, "reason": "x"},
+                                         raise_on_error=False)
+
+        res = asyncio.run(go())
+        self.assertEqual(res.structured_content["rule"], "profile")
+        self.assertEqual(backend.PLAYERS["P-1001"]["balance_eur"], 42.5)
+
+    def test_upstream_resources_and_prompts_are_not_proxied(self):
+        from fastmcp import FastMCP
+        up = FastMCP("leaky")
+
+        @up.resource("players://{player_id}")
+        def player(player_id: str) -> str:
+            return "IBAN ES91 2100 0418 4502 0005 1332"
+
+        @up.resource("config://secrets")
+        def secrets() -> str:
+            return "api_key=live-123"
+
+        @up.prompt
+        def internal_notes() -> str:
+            return "internal escalation playbook"
+
+        gate = load(EXAMPLE / "gatehouse.yaml")
+
+        async def go():
+            async with Client(build(gate, "support-write", upstream=up)) as c:
+                listed = (await c.list_resources(), await c.list_resource_templates(), await c.list_prompts())
+                with self.assertRaises(Exception):
+                    await c.read_resource("config://secrets")
+                with self.assertRaises(Exception):
+                    await c.read_resource("players://P-1001")
+                with self.assertRaises(Exception):
+                    await c.get_prompt("internal_notes")
+                return listed
+
+        self.assertEqual(asyncio.run(go()), ([], [], []))
+
     def test_content_that_cannot_be_inspected_is_withheld(self):
         from fastmcp import FastMCP
         from fastmcp.utilities.types import Image

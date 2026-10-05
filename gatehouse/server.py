@@ -13,6 +13,7 @@ from pathlib import Path
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.server import create_proxy
 from fastmcp.server.auth import AccessToken, TokenVerifier
+from fastmcp.exceptions import PromptError, ResourceError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
@@ -32,6 +33,23 @@ class GateMiddleware(Middleware):
         return [t.model_copy(update={"output_schema": None}) for t in await call_next(context)
                 if self.gate.visible(self.profile, t.name)]
 
+    # gatehouse governs tools. Resources and prompts from the upstream would bypass every rule and
+    # every mask, so they are not proxied at all. Fail closed.
+    async def on_list_resources(self, context, call_next):
+        return []
+
+    async def on_list_resource_templates(self, context, call_next):
+        return []
+
+    async def on_list_prompts(self, context, call_next):
+        return []
+
+    async def on_read_resource(self, context, call_next):
+        raise ResourceError("gatehouse proxies tools only")
+
+    async def on_get_prompt(self, context, call_next):
+        raise PromptError("gatehouse proxies tools only")
+
     async def on_call_tool(self, context: MiddlewareContext, call_next):
         tool, args = context.message.name, dict(context.message.arguments or {})
         session = _session(context)
@@ -41,7 +59,8 @@ class GateMiddleware(Middleware):
 
         # Shadow mode runs the call anyway and only records the verdict. Masking still applies:
         # it is never safe to show the model what it should not see, even while measuring.
-        if decision.action != "allow" and not self.gate.shadow:
+        # Shadow mode softens rules only. The profile is the permission boundary and always holds.
+        if decision.action != "allow" and (decision.rule == "profile" or not self.gate.shadow):
             result = _data(decision.as_error())
         else:
             key = self.gate.replays.key(tool, args)
