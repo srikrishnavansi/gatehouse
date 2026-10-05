@@ -5,6 +5,7 @@
 upstream: backend.py                  # or http://operator-mcp:8765/mcp
 api_key: ${MCP_API_KEY}               # what the platform injects into a self-hosted MCP; checked on every request
 audit_log: audit.jsonl
+mode: enforce                         # or shadow: log what would be blocked, block nothing
 
 # Attaching a profile is the permission grant: run one gatehouse per profile and give each its
 # own entry under agent_config.mcps. A tool outside the profile is invisible and uncallable.

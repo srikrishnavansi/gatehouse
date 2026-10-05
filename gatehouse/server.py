@@ -39,7 +39,9 @@ class GateMiddleware(Middleware):
         decision = self.gate.decide(self.profile, tool, args)
         replayed = False
 
-        if decision.action != "allow":
+        # Shadow mode runs the call anyway and only records the verdict. Masking still applies:
+        # it is never safe to show the model what it should not see, even while measuring.
+        if decision.action != "allow" and not self.gate.shadow:
             result = _data(decision.as_error())
         else:
             key = self.gate.replays.key(tool, args)
@@ -71,6 +73,7 @@ class GateMiddleware(Middleware):
         line = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "session": session,
                 "profile": self.profile, "tool": tool, "args": self.gate.mask(args),
                 "decision": "replayed" if replayed else decision.action, "rule": decision.rule,
+                "enforced": not self.gate.shadow,
                 "ms": round((time.monotonic() - started) * 1000, 1)}
         with open(self.gate.audit_log, "a") as f:
             f.write(json.dumps(line, ensure_ascii=False) + "\n")

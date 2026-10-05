@@ -210,6 +210,7 @@ class Gate:
     api_key: str | None = None
     api_key_declared: bool = False      # config asked for a key; if it resolves empty, refuse to serve
     audit_log: str | None = None
+    shadow: bool = False                # log what would be blocked, block nothing (for a first rollout)
 
     def visible(self, profile: str, tool: str) -> bool:
         return tool in self.profiles[profile]
@@ -255,4 +256,5 @@ def load(path: str | Path) -> Gate:
         api_key=_env(cfg.get("api_key")),
         api_key_declared=bool(cfg.get("api_key")),
         audit_log=str(path.parent / cfg["audit_log"]) if cfg.get("audit_log") else None,
+        shadow=cfg.get("mode", "enforce") == "shadow",
     )

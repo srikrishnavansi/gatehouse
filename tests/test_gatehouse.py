@@ -182,6 +182,21 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(backend.PLAYERS["P-1001"]["iban"], "ES91 2100 0418 4502 0005 1332")
         self.assertEqual(audit[0]["args"]["iban"], "****5766")       # no raw IBAN in the audit log
 
+    def test_shadow_mode_records_the_verdict_but_runs_the_call_masked(self):
+        backend = fresh_backend()
+        gate = load(EXAMPLE / "gatehouse.yaml")
+        gate.shadow, gate.audit_log = True, str(Path(tempfile.mkdtemp()) / "audit.jsonl")
+
+        async def go():
+            async with Client(build(gate, "support-write", upstream=backend.mcp)) as c:
+                return await c.call_tool("update_bank_account", {"player_id": "P-1001", "iban": "DE89 3704 0044 0532 0130 00"})
+
+        res = asyncio.run(go())
+        line = json.loads(Path(gate.audit_log).read_text())
+        self.assertEqual((line["decision"], line["enforced"]), ("handoff", False))
+        self.assertEqual(res.structured_content["status"], "UPDATED")            # it ran
+        self.assertEqual(res.structured_content["iban"], "****3000")             # still masked
+
     def test_content_that_cannot_be_inspected_is_withheld(self):
         from fastmcp import FastMCP
         from fastmcp.utilities.types import Image

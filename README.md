@@ -18,6 +18,7 @@ those rules in code, from one YAML file:
 | **Masking** | Every result is masked before the model sees it: named fields (`iban: last4`, `date_of_birth: drop`) anywhere in the tree, and PII inside free text (IBANs, Luhn-valid card numbers, emails, phone numbers). |
 | **Idempotency** | A retried write with the same arguments returns the first result instead of running again. |
 | **Audit** | One JSON line per call: profile, tool, masked arguments, decision, rule, latency. |
+| **Shadow mode** | `mode: shadow` records what every rule would have done and blocks nothing (results are still masked), so a first rollout can be measured before it is enforced. |
 | **Auth** | Checks the bearer key on every request (`MCP_API_KEY`), because the platform does not. |
 
 The customer's tools do not change. The agent's prompt does not change.
@@ -112,7 +113,7 @@ iai mcps create gatehouse-support-write --image-name gatehouse --image-tag v1 --
 python -m unittest discover -s tests
 ```
 
-26 tests: every rule; masking edge cases (only Luhn-valid card numbers, amounts and ticket ids
+27 tests: every rule; shadow mode; masking edge cases (only Luhn-valid card numbers, amounts and ticket ids
 untouched); the idempotency window; the full proxy in memory; a real streamable-http run that refuses
 a call without the bearer key and still applies the rules with it; and a set of bypass regressions.
 
