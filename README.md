@@ -23,6 +23,93 @@ those rules in code, from one YAML file:
 
 The customer's tools do not change. The agent's prompt does not change.
 
+## Where it sits
+
+```mermaid
+flowchart LR
+    subgraph agent["Agent runtime (unchanged)"]
+        direction TB
+        P["Policies and routines<br/>decide what the agent should do"]
+        R["LLM router"]
+        M1["mcps: operator-read"]
+        M2["mcps: operator-write"]
+    end
+
+    subgraph gh["gatehouse, one process per profile"]
+        direction TB
+        A["1 Bearer check<br/>MCP_API_KEY on every request"]
+        F["2 Profile<br/>only granted tools are listed"]
+        X["3 Rules<br/>allow, deny or handoff"]
+        I["4 Idempotency<br/>a retried write returns the first result"]
+        K["5 Mask<br/>fields and PII in free text"]
+        L["6 Audit<br/>one JSON line per call"]
+        A --> F --> X --> I
+        K --> L
+    end
+
+    subgraph up["Customer's MCP server (unchanged)"]
+        direction TB
+        U1["Player accounts"]
+        U2["Support desk"]
+        U3["KYC provider"]
+        U4["Payments"]
+    end
+
+    M2 -- "tools/call" --> A
+    I -- "allowed call" --> up
+    up -- "raw result" --> K
+    L -- "masked result" --> M2
+    X -. "handoff: needs_human as data,<br/>upstream untouched" .-> M2
+```
+
+A call the rules refuse never reaches the customer's systems. A call they allow comes back masked.
+Every call leaves one audit line.
+
+## One call, decided
+
+```mermaid
+flowchart TD
+    C(["tools/call from the agent"]) --> K{"Bearer key valid?"}
+    K -- no --> E1["401, nothing runs"]
+    K -- yes --> P{"Tool in this profile?"}
+    P -- no --> D1["not_allowed, rule: profile<br/>(enforced even in shadow mode)"]
+    P -- yes --> R{"First matching rule"}
+    R -- "deny or handoff" --> S{"mode: shadow?"}
+    S -- no --> D2["return the error as data<br/>handoff names initiate_human_handoff"]
+    S -- yes --> Q
+    R -- "no match: allow" --> Q{"Same write seen<br/>inside the window?"}
+    R -- "rule cannot read an argument" --> D3["deny, fail closed"]
+    Q -- yes --> RP["return the first result, run nothing"]
+    Q -- no --> UP["call the upstream tool"]
+    UP --> MK["mask the result:<br/>named fields, PII in text,<br/>withhold images and files"]
+    MK --> OUT(["masked result to the agent"])
+    D1 & D2 & D3 & RP & OUT --> AU[("audit.jsonl<br/>masked arguments, decision, rule, ms")]
+```
+
+## A handoff, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Player
+    participant Agent as Agent (policies, router)
+    participant Gate as gatehouse (support-write)
+    participant PAM as Player accounts
+    participant Human as Support person
+
+    Player->>Agent: "Please pay my winnings to a new IBAN"
+    Agent->>Gate: tools/call update_bank_account(P-1001, ES76...)
+    Gate->>Gate: rule bank-account-changes-go-to-a-human matches
+    Gate-->>Agent: {"error": "needs_human", "rule": "...", "next": "initiate_human_handoff"}
+    Note over Gate,PAM: The player account is never called
+    Agent->>Human: built-in:initiate_human_handoff(reason)
+    Human->>PAM: verifies identity, changes the IBAN
+    Agent->>Gate: tools/call get_player(P-1001)
+    Gate->>PAM: get_player(P-1001)
+    PAM-->>Gate: full record, IBAN, phone, date of birth
+    Gate-->>Agent: iban ****5766, phone ****5678, date of birth dropped
+```
+
 ## Two minutes, no keys
 
 ```
@@ -80,7 +167,7 @@ idempotency:
   window_seconds: 600
 ```
 
-Conditions: `gt`, `gte`, `lt`, `equals`, `in`, `matches` (regex), `missing`. The full example is
+Conditions: `gt`, `gte`, `lt`, `lte`, `equals`, `in`, `matches` (regex), `missing`. The full example is
 [examples/igaming/gatehouse.yaml](examples/igaming/gatehouse.yaml).
 
 ## Running it in front of a real server
