@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -43,24 +44,49 @@ class Rule:
         return tool in self.tools and all(_test(args.get(k), test) for k, test in self.when.items())
 
 
+# Read arguments the way the upstream's validator will (pydantic lax mode), so a rule never
+# decides on "true" while the tool executes on True. Anything unreadable raises: fail closed.
+_TRUE, _FALSE = {"true", "1", "yes", "on", "t", "y"}, {"false", "0", "no", "off", "f", "n"}
+
+
+def _num(value) -> float:
+    if isinstance(value, bool):
+        raise TypeError("a boolean is not an amount")
+    n = float(value)
+    if not math.isfinite(n):                       # NaN > 50 is False: never let that read as "allowed"
+        raise ValueError("non-finite number")
+    return n
+
+
+def _same(value, want) -> bool:
+    if isinstance(want, bool) and isinstance(value, str):
+        v = value.strip().lower()
+        value = True if v in _TRUE else False if v in _FALSE else value
+    elif isinstance(want, (int, float)) and not isinstance(want, bool) and isinstance(value, str):
+        value = _num(value)
+    return value == want
+
+
 def _test(value, test: dict) -> bool:
     for op, want in test.items():
         if op == "missing":
-            ok = (value in (None, "")) == want
+            ok = (value is None or (isinstance(value, str) and not value.strip())) == want
         elif value is None:
             ok = False
         elif op == "gt":
-            ok = float(value) > want
+            ok = _num(value) > want
         elif op == "gte":
-            ok = float(value) >= want
+            ok = _num(value) >= want
         elif op == "lt":
-            ok = float(value) < want
+            ok = _num(value) < want
+        elif op == "lte":
+            ok = _num(value) <= want
         elif op == "equals":
-            ok = value == want
+            ok = _same(value, want)
         elif op == "in":
-            ok = value in want
+            ok = any(_same(value, w) for w in want)
         elif op == "matches":
-            ok = re.search(want, str(value)) is not None
+            ok = re.search(want, value if isinstance(value, str) else json.dumps(value)) is not None
         else:
             raise ValueError(f"unknown condition {op!r}")
         if not ok:
@@ -111,16 +137,24 @@ def scrub(text: str, patterns: list[str]) -> str:
     return text
 
 
+def _key(name) -> str:
+    """iban, IBAN, Iban and date_of_birth / dateOfBirth / date-of-birth all name the same field."""
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
 @dataclass
 class Masker:
     fields: dict[str, str] = field(default_factory=dict)   # field name -> last4 | domain | redact | drop
     patterns: list[str] = field(default_factory=list)
 
+    def __post_init__(self):
+        self.fields = {_key(k): v for k, v in self.fields.items()}
+
     def __call__(self, obj):
         if isinstance(obj, dict):
             out = {}
             for k, v in obj.items():
-                how = self.fields.get(k)
+                how = self.fields.get(_key(k))
                 if how == "drop":
                     continue
                 out[k] = FIELD_MASKS[how](v) if how and v is not None else self(v)
@@ -174,6 +208,7 @@ class Gate:
     replays: Replays
     upstream: str = ""
     api_key: str | None = None
+    api_key_declared: bool = False      # config asked for a key; if it resolves empty, refuse to serve
     audit_log: str | None = None
 
     def visible(self, profile: str, tool: str) -> bool:
@@ -218,5 +253,6 @@ def load(path: str | Path) -> Gate:
         replays=Replays(idem.get("tools", []), idem.get("window_seconds", 600)),
         upstream=upstream,
         api_key=_env(cfg.get("api_key")),
+        api_key_declared=bool(cfg.get("api_key")),
         audit_log=str(path.parent / cfg["audit_log"]) if cfg.get("audit_log") else None,
     )

@@ -53,8 +53,7 @@ class Decisions(unittest.TestCase):
         self.assertEqual(self.action("add_ticket_comment", {"body": body, "public": False})[0], "allow")
 
     def test_an_argument_a_rule_cannot_read_is_denied_not_crashed(self):
-        self.assertEqual(self.action("apply_bonus", {"amount_eur": "lots"}),
-                         ("deny", "bonus-above-50-needs-a-supervisor"))
+        self.assertEqual(self.action("apply_bonus", {"amount_eur": "lots"})[0], "deny")
 
     def test_profiles_are_the_permission(self):
         self.assertEqual(self.action("apply_bonus", {"amount_eur": 1}, "support-read"), ("deny", "profile"))
@@ -64,6 +63,48 @@ class Decisions(unittest.TestCase):
         err = self.gate.decide("support-write", "set_self_exclusion", {}).as_error()
         self.assertEqual(err["error"], "needs_human")
         self.assertIn("initiate_human_handoff", err["next"])
+
+
+class HardenedAgainstBypass(unittest.TestCase):
+    """Regression tests from the security review: a rule must read arguments the way the upstream
+    will execute them, and anything it cannot read must fail closed."""
+    gate = load(EXAMPLE / "gatehouse.yaml")
+
+    def action(self, tool, args):
+        return self.gate.decide("support-write", tool, args).action
+
+    def test_nan_and_infinity_do_not_slip_under_a_threshold(self):
+        for amount in ("nan", float("nan"), "inf", float("inf"), True):
+            self.assertEqual(self.action("apply_bonus", {"amount_eur": amount}), "deny", amount)
+
+    def test_negative_and_zero_bonuses_are_refused(self):
+        self.assertEqual(self.action("apply_bonus", {"amount_eur": -100}), "deny")
+        self.assertEqual(self.action("apply_bonus", {"amount_eur": "0"}), "deny")
+
+    def test_numbers_as_strings_are_read_as_numbers(self):
+        self.assertEqual(self.action("apply_bonus", {"amount_eur": "120"}), "handoff")
+
+    def test_a_string_true_is_true(self):
+        body = "refund to ES91 2100 0418 4502 0005 1332"
+        for public in ("true", "True", "1", "yes", 1):
+            self.assertEqual(self.action("add_ticket_comment", {"body": body, "public": public}), "deny", public)
+
+    def test_whitespace_is_missing(self):
+        self.assertEqual(self.action("close_ticket", {"ticket_id": "T", "resolution": "   "}), "deny")
+
+    def test_field_names_match_regardless_of_spelling(self):
+        m = Masker({"iban": "last4", "date_of_birth": "drop"}, [])
+        self.assertEqual(m({"IBAN": "ES9121000418450200051332", "dateOfBirth": "1991", "Date-Of-Birth": "1991"}),
+                         {"IBAN": "****1332"})
+
+    def test_refuses_to_start_when_the_declared_key_is_missing(self):
+        env = {k: v for k, v in os.environ.items() if k != "MCP_API_KEY"}
+        env["PYTHONPATH"] = str(ROOT)
+        r = subprocess.run([sys.executable, "-m", "gatehouse", str(EXAMPLE / "gatehouse.yaml"),
+                            "--profile", "support-write", "--port", str(free_port())],
+                           env=env, capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Refusing to serve unauthenticated", r.stderr)
 
 
 class Masking(unittest.TestCase):
@@ -140,6 +181,26 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(res["error"], "needs_human")
         self.assertEqual(backend.PLAYERS["P-1001"]["iban"], "ES91 2100 0418 4502 0005 1332")
         self.assertEqual(audit[0]["args"]["iban"], "****5766")       # no raw IBAN in the audit log
+
+    def test_content_that_cannot_be_inspected_is_withheld(self):
+        from fastmcp import FastMCP
+        from fastmcp.utilities.types import Image
+        up = FastMCP("kyc")
+
+        @up.tool
+        def get_id_document(player_id: str) -> Image:
+            return Image(data=b"\x89PNG fake passport scan", format="png")
+
+        gate = load(EXAMPLE / "gatehouse.yaml")
+        gate.profiles["support-write"].append("get_id_document")
+
+        async def go():
+            async with Client(build(gate, "support-write", upstream=up)) as c:
+                return await c.call_tool("get_id_document", {"player_id": "P-1001"})
+
+        res = asyncio.run(go())
+        self.assertEqual([b.type for b in res.content], ["text"])
+        self.assertIn("withheld", res.content[0].text)
 
     def test_a_retried_bonus_is_paid_once(self):
         call = ("apply_bonus", {"player_id": "P-1001", "amount_eur": 10, "reason": "slow"})

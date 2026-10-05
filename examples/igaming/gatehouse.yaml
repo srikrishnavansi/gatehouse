@@ -39,6 +39,12 @@ rules:
     action: handoff
     reason: Responsible-gaming requests are confirmed by a trained agent.
 
+  - id: bonus-must-be-positive
+    tools: [apply_bonus]
+    when: {amount_eur: {lte: 0}}
+    action: deny
+    reason: A bonus is a credit; zero or negative amounts are not bonuses.
+
   - id: bonus-above-50-needs-a-supervisor
     tools: [apply_bonus]
     when: {amount_eur: {gt: 50}}

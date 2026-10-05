@@ -112,9 +112,23 @@ iai mcps create gatehouse-support-write --image-name gatehouse --image-tag v1 --
 python -m unittest discover -s tests
 ```
 
-18 tests: every rule (and fail-closed when a rule cannot read an argument), masking edge cases (only Luhn-valid card numbers, amounts and ticket ids
-untouched), the idempotency window, the full proxy in memory, and a real streamable-http run that
-refuses a call without the bearer key and still applies the rules with it.
+26 tests: every rule; masking edge cases (only Luhn-valid card numbers, amounts and ticket ids
+untouched); the idempotency window; the full proxy in memory; a real streamable-http run that refuses
+a call without the bearer key and still applies the rules with it; and a set of bypass regressions.
+
+## Fails closed
+
+A guardrail that can be argued past is a suggestion. gatehouse reads arguments the way the
+upstream's validator will execute them, and refuses whatever it cannot read:
+
+* `"true"`, `"1"`, `"yes"` are true and `"120"` is 120, so a rule never decides on a string while the
+  tool runs on the coerced value.
+* `NaN`, infinities and booleans in an amount are refused, not compared (`NaN > 50` is false).
+* A rule that cannot evaluate an argument denies the call; whitespace counts as missing.
+* `IBAN`, `iban` and `dateOfBirth` / `date_of_birth` are the same field to the masker.
+* Content it cannot inspect (an image of an ID document, an embedded file) is withheld.
+* The bearer key is compared in constant time, and if the config asks for a key that resolves empty,
+  gatehouse refuses to start rather than serving unauthenticated.
 
 ## Limits, honestly
 
