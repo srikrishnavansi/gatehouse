@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gatehouse-mcp"
+version = "0.1.0"
+description = "A guardrail proxy for MCP tools: per-tool profiles, deterministic rules, PII masking, idempotent writes, an audit log."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Sri Krishna Vamsi D" }]
+keywords = ["mcp", "agents", "guardrails", "fastmcp", "llm"]
+dependencies = ["fastmcp>=4.0", "pyyaml>=6"]
+
+[project.scripts]
+gatehouse = "gatehouse.server:main"
+
+[tool.setuptools]
+packages = ["gatehouse"]
